@@ -40,45 +40,81 @@ type processResults struct {
 }
 
 func processFiles() (*processResults, *bytes.Buffer, error) {
-	entries, err := os.ReadDir(inputDir)
-	if err != nil {
-		return nil, nil, fmt.Errorf("error reading input directory: %w", err)
-	}
-
 	results := &processResults{}
 	combinedContent := bytes.NewBuffer(nil)
 
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-
-		filename := entry.Name()
-		content, err := os.ReadFile(filepath.Join(inputDir, filename))
+	err := filepath.WalkDir(inputDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			results.failed++
-			fmt.Printf("⚠️ Error processing %s: %v\n", filename, err)
-			continue
+			fmt.Printf("⚠️ Error accessing %s: %v\n", path, err)
+			return nil
 		}
 
-		outputPath := filepath.Join(outputDir, filename+".txt")
-		if err := os.WriteFile(outputPath, content, fs.FileMode(fileMode)); err != nil {
+		if d.IsDir() {
+			return nil
+		}
+
+		if d.Name() == ".DS_Store" {
+			return nil
+		}
+
+		relPath, err := filepath.Rel(inputDir, path)
+		if err != nil {
 			results.failed++
-			fmt.Printf("⚠️ Error writing %s: %v\n", filename, err)
-			continue
+			fmt.Printf("⚠️ Error processing %s: %v\n", path, err)
+			return nil
+		}
+
+		baseName := filepath.Base(relPath)
+		displayPath := filepath.ToSlash(relPath)
+
+		content, err := os.ReadFile(path)
+		if err != nil {
+			results.failed++
+			fmt.Printf("⚠️ Error processing %s: %v\n", displayPath, err)
+			return nil
+		}
+
+		outputPath := filepath.Join(outputDir, relPath) + ".txt"
+		if err := os.MkdirAll(filepath.Dir(outputPath), filePerm); err != nil {
+			results.failed++
+			fmt.Printf("⚠️ Error preparing directory for %s: %v\n", displayPath, err)
+			return nil
+		}
+
+		fileBuffer := bytes.NewBuffer(nil)
+		fmt.Fprintf(fileBuffer, "FILE: %s\nDESTINATION: %s\n\n", baseName, displayPath)
+		fileBuffer.Write(content)
+
+		if err := os.WriteFile(outputPath, fileBuffer.Bytes(), fs.FileMode(fileMode)); err != nil {
+			results.failed++
+			fmt.Printf("⚠️ Error writing %s: %v\n", displayPath, err)
+			return nil
 		}
 
 		results.success++
-		fmt.Printf("✅ Created: %s.txt\n", filename)
-		writeFileToCombined(combinedContent, filename, content)
+		fmt.Printf("✅ Created: %s.txt\n", displayPath)
+		writeFileToCombined(combinedContent, displayPath, content)
+		return nil
+	})
+
+	if err != nil {
+		return nil, nil, fmt.Errorf("error walking input directory: %w", err)
 	}
 
 	return results, combinedContent, nil
 }
 
-func writeFileToCombined(buffer *bytes.Buffer, filename string, content []byte) {
+func writeFileToCombined(buffer *bytes.Buffer, displayPath string, content []byte) {
 	separator := strings.Repeat("=", separatorLength)
-	fmt.Fprintf(buffer, "\n%s\nFILE: %s\n%s\n\n", separator, filename, separator)
+	fmt.Fprintf(
+		buffer,
+		"\n%s\nFILE: %s\nDESTINATION: %s\n%s\n\n",
+		separator,
+		filepath.Base(displayPath),
+		displayPath,
+		separator,
+	)
 	buffer.Write(content)
 }
 
